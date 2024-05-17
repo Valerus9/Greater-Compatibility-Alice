@@ -2646,6 +2646,15 @@ void take_from_sphere(sys::state& state, dcon::nation_id member, dcon::nation_id
 	state.world.gp_relationship_get_status(nrel) |= nations::influence::level_in_sphere;
 	state.world.gp_relationship_set_influence(nrel, state.defines.max_influence);
 	state.world.nation_set_in_sphere_of(member, new_gp);
+
+	notification::post(state, notification::message{
+		[member, existing_sphere_leader, new_gp](sys::state& state, text::layout_base& contents) {
+			text::add_line(state, contents, "msg_rem_sphere_2", text::variable_type::x, new_gp, text::variable_type::y, member, text::variable_type::val, existing_sphere_leader);
+		},
+		"msg_rem_sphere_title",
+		new_gp, existing_sphere_leader, member,
+		sys::message_base_type::rem_sphere
+	});
 }
 
 void implement_war_goal(sys::state& state, dcon::war_id war, dcon::cb_type_id wargoal, dcon::nation_id from,
@@ -2828,15 +2837,17 @@ void implement_war_goal(sys::state& state, dcon::war_id war, dcon::cb_type_id wa
 
 	if((bits & cb_flag::po_transfer_provinces) != 0) {
 		auto target_tag = state.world.nation_get_identity_from_identity_holder(target);
-
-		auto holder = state.world.national_identity_get_nation_from_identity_holder(wargoal_t);
-		if(!holder) {
-			holder = state.world.create_nation();
-			state.world.nation_set_identity_from_identity_holder(holder, wargoal_t);
-		}
-		auto lprovs = state.world.nation_get_province_ownership(holder);
-		if(lprovs.begin() == lprovs.end()) {
-			nations::create_nation_based_on_template(state, holder, from);
+		// No defined wargoal_t leads to defaulting to the from nation
+		dcon::nation_id holder = from;
+		if(wargoal_t) {
+			holder = state.world.national_identity_get_nation_from_identity_holder(wargoal_t);
+			if(!holder) {
+				holder = state.world.create_nation();
+				state.world.nation_set_identity_from_identity_holder(holder, wargoal_t);
+			}
+			if(auto lprovs = state.world.nation_get_province_ownership(holder); lprovs.begin() == lprovs.end()) {
+				nations::create_nation_based_on_template(state, holder, from);
+			}
 		}
 
 		add_truce(state, holder, target, 365);
@@ -2861,9 +2872,7 @@ void implement_war_goal(sys::state& state, dcon::war_id war, dcon::cb_type_id wa
 				}
 			}
 			for(auto si : prior_states) {
-				for(auto prov :
-						state.world.state_definition_get_abstract_state_membership(state.world.state_instance_get_definition(si))) {
-
+				for(auto prov : state.world.state_definition_get_abstract_state_membership(state.world.state_instance_get_definition(si))) {
 					if(prov.get_province().get_nation_from_province_ownership() == target) {
 						province::conquer_province(state, prov.get_province(), holder);
 						if((bits & cb_flag::po_remove_cores) != 0) {
@@ -3057,7 +3066,8 @@ void run_gc(sys::state& state) {
 		}
 		bool non_sq_war_goal = false;
 		for(auto wg : w.get_wargoals_attached()) {
-			if((wg.get_wargoal().get_type().get_type_bits() & cb_flag::po_status_quo) != 0) {
+			// Has to truly be a status quo, not a pseudo status quo like the american cb on GFM
+			if(wg.get_wargoal().get_type().get_type_bits() == cb_flag::po_status_quo) {
 				// ignore status quo
 			} else {
 				non_sq_war_goal = true;
